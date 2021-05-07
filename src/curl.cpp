@@ -2698,10 +2698,10 @@ int S3fsCurl::PreMultipartPostRequest(const char* tpath, headers_t& meta, string
   /*requestHeaders = curl_slist_sort_insert(requestHeaders, "x-cos-acl", S3fsCurl::default_acl.c_str());
   if(REDUCED_REDUNDANCY == GetStorageClass()){
     requestHeaders = curl_slist_sort_insert(requestHeaders, "x-cos-storage-class", "REDUCED_REDUNDANCY");
-  } else if(STANDARD_IA == GetStorageClass()){
+  } else */
+  if(STANDARD_IA == GetStorageClass()){
     requestHeaders = curl_slist_sort_insert(requestHeaders, "x-cos-storage-class", "STANDARD_IA");
-  }*/
-
+  }
 
   string date    = get_date_rfc850();
   requestHeaders = curl_slist_sort_insert(requestHeaders, "Date", date.c_str());

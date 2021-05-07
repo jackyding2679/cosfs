@@ -931,7 +931,7 @@ void show_help (void)
     "\n"
     "   storage_class (default=\"standard\")\n"
     "      - store object with specified storage class.  Possible values:\n"
-    "        standard, standard_ia, and reduced_redundancy.\n"
+    "        standard, standard_ia.\n"
     "\n"
     "   public_bucket (default=\"\" which means disabled)\n"
     "      - anonymously mount a public bucket when set to 1\n"
