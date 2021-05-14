@@ -19,6 +19,7 @@
  */
 
 #include <stdio.h>
+#include<time.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -125,6 +126,7 @@ static bool is_s3fs_umask         = false;// default does not set.
 static bool is_remove_cache       = false;
 static bool create_bucket         = false;
 static int64_t singlepart_copy_limit = FIVE_GB;
+static size_t log_api_over_ms = 100000;
 
 //-------------------------------------------------------------------
 // Static functions : prototype
@@ -224,6 +226,14 @@ static void s3fs_exit_fuseloop(int exit_status);
 //-------------------------------------------------------------------
 // Functions
 //-------------------------------------------------------------------
+static int diff_millisecond(struct timeval start) {
+  struct timeval end;
+  gettimeofday(&end, NULL);
+  int secs  = end.tv_sec  - start.tv_sec;
+  int usecs = end.tv_usec - start.tv_usec;
+  return ((secs) * 1000 + usecs / 1000.0);
+}
+
 static void s3fs_usr2_handler(int sig)
 {
   if(SIGUSR2 == sig){
@@ -799,11 +809,19 @@ static int s3fs_getattr(const char* path, struct stat* stbuf)
 
   S3FS_PRN_INFO("[path=%s]", path);
 
+  struct timeval start;
+  gettimeofday(&start, NULL);
   // check parent directory attribute.
   if(0 != (result = check_parent_object_access(path, X_OK))){
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_getattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return result;
   }
   if(0 != (result = check_object_access(path, F_OK, stbuf))){
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_getattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return result;
   }
   // If has already opened fd, the st_size shuld be instead.
@@ -824,6 +842,9 @@ static int s3fs_getattr(const char* path, struct stat* stbuf)
   S3FS_PRN_DBG("[path=%s] uid=%u, gid=%u, mode=%04o", path, (unsigned int)(stbuf->st_uid), (unsigned int)(stbuf->st_gid), stbuf->st_mode);
   S3FS_MALLOCTRIM(0);
 
+  if(diff_millisecond(start) > log_api_over_ms) {
+    S3FS_PRN_WARN("s3fs_getattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+  }
   return result;
 }
 
@@ -1886,19 +1907,30 @@ static int s3fs_utimens(const char* path, const struct timespec ts[2])
 
   S3FS_PRN_INFO("[path=%s][mtime=%jd]", path, (intmax_t)(ts[1].tv_sec));
   struct fuse_context* pcxt;
+  struct timeval start;
+  gettimeofday(&start, NULL);
   if(NULL != (pcxt = fuse_get_context())){
     S3FS_PRN_INFO("%s, uid=[%d], gid=[%d], pid=[%d]", __FUNCTION__, pcxt->uid, pcxt->gid, pcxt->pid);
   }
 
   if(0 == strcmp(path, "/")){
     S3FS_PRN_ERR("Could not change mtime for maount point.");
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_utimens, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return -EIO;
   }
   if(0 != (result = check_parent_object_access(path, X_OK))){
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_utimens, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return result;
   }
   if(0 != (result = check_object_access(path, W_OK, &stbuf))){
     if(0 != check_object_owner(path, &stbuf)){
+      if(diff_millisecond(start) > log_api_over_ms) {
+        S3FS_PRN_WARN("s3fs_utimens, path:%s, timeused:%dms", path, diff_millisecond(start));
+      }
       return result;
     }
   }
@@ -1911,6 +1943,9 @@ static int s3fs_utimens(const char* path, const struct timespec ts[2])
     result   = get_object_attribute(strpath.c_str(), NULL, &meta);
   }
   if(0 != result){
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_utimens, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return result;
   }
 
@@ -1922,6 +1957,9 @@ static int s3fs_utimens(const char* path, const struct timespec ts[2])
     if(IS_RMTYPEDIR(nDirType)){
       S3fsCurl s3fscurl;
       if(0 != (result = s3fscurl.DeleteRequest(strpath.c_str()))){
+        if(diff_millisecond(start) > log_api_over_ms) {
+          S3FS_PRN_WARN("s3fs_utimens, path:%s, timeused:%dms", path, diff_millisecond(start));
+        }
         return result;
       }
     }
@@ -1929,6 +1967,9 @@ static int s3fs_utimens(const char* path, const struct timespec ts[2])
 
     // Make new directory object("dir/")
     if(0 != (result = create_directory_object(newpath.c_str(), stbuf.st_mode, ts[1].tv_sec, stbuf.st_uid, stbuf.st_gid))){
+      if(diff_millisecond(start) > log_api_over_ms) {
+        S3FS_PRN_WARN("s3fs_utimens, path:%s, timeused:%dms", path, diff_millisecond(start));
+      }
       return result;
     }
   }else{
@@ -1954,6 +1995,9 @@ static int s3fs_utimens(const char* path, const struct timespec ts[2])
             // updatemeta already merged the orgmeta of the opened files.
             if(0 != put_headers(strpath.c_str(), updatemeta, true)){
                 FdManager::get()->Close(ent);
+                if(diff_millisecond(start) > log_api_over_ms) {
+                  S3FS_PRN_WARN("s3fs_utimens, path:%s, timeused:%dms", path, diff_millisecond(start));
+                }
                 return -EIO;
             }
             StatCache::getStatCacheData()->DelStat(nowcache);
@@ -1963,12 +2007,18 @@ static int s3fs_utimens(const char* path, const struct timespec ts[2])
         // not opened file, then put headers
         merge_headers(meta, updatemeta, true);
         if(0 != put_headers(strpath.c_str(), meta, true)){
+            if(diff_millisecond(start) > log_api_over_ms) {
+              S3FS_PRN_WARN("s3fs_utimens, path:%s, timeused:%dms", path, diff_millisecond(start));
+            }
             return -EIO;
         }
         StatCache::getStatCacheData()->DelStat(nowcache);
     }
   }
   S3FS_MALLOCTRIM(0);
+  if(diff_millisecond(start) > log_api_over_ms) {
+    S3FS_PRN_WARN("s3fs_utimens, path:%s, timeused:%dms", path, diff_millisecond(start));
+  }
 
   return 0;
 }
@@ -2137,6 +2187,8 @@ static int s3fs_open(const char* path, struct fuse_file_info* fi)
 
   S3FS_PRN_INFO("[path=%s][flags=%d]", path, fi->flags);
   struct fuse_context* pcxt;
+  struct timeval start;
+  gettimeofday(&start, NULL);
   if(NULL != (pcxt = fuse_get_context())){
     S3FS_PRN_INFO("%s, uid=[%d], gid=[%d], pid=[%d]", __FUNCTION__, pcxt->uid, pcxt->gid, pcxt->pid);
   }
@@ -2148,15 +2200,24 @@ static int s3fs_open(const char* path, struct fuse_file_info* fi)
 
   int mask = (O_RDONLY != (fi->flags & O_ACCMODE) ? W_OK : R_OK);
   if(0 != (result = check_parent_object_access(path, X_OK))){
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_open, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return result;
   }
 
   result = check_object_access(path, mask, &st);
   if(-ENOENT == result){
     if(0 != (result = check_parent_object_access(path, W_OK))){
+      if(diff_millisecond(start) > log_api_over_ms) {
+        S3FS_PRN_WARN("s3fs_open, path:%s, timeused:%dms", path, diff_millisecond(start));
+      }
       return result;
     }
   }else if(0 != result){
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_open, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return result;
   }
 
@@ -2174,6 +2235,9 @@ static int s3fs_open(const char* path, struct fuse_file_info* fi)
   headers_t   meta;
   get_object_attribute(path, NULL, &meta);
   if(NULL == (ent = FdManager::get()->Open(path, &meta, static_cast<ssize_t>(st.st_size), st.st_mtime, false, true))){
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_open, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return -EIO;
   }
 
@@ -2181,12 +2245,18 @@ static int s3fs_open(const char* path, struct fuse_file_info* fi)
     if(0 != (result = ent->RowFlush(path, true))){
       S3FS_PRN_ERR("could not upload file(%s): result=%d", path, result);
       FdManager::get()->Close(ent);
+      if(diff_millisecond(start) > log_api_over_ms) {
+        S3FS_PRN_WARN("s3fs_open, path:%s, timeused:%dms", path, diff_millisecond(start));
+      }
       return result;
     }
   }
 
   fi->fh = ent->GetFd();
   S3FS_MALLOCTRIM(0);
+  if(diff_millisecond(start) > log_api_over_ms) {
+    S3FS_PRN_WARN("s3fs_open, path:%s, timeused:%dms", path, diff_millisecond(start));
+  }
 
   return 0;
 }
@@ -2197,6 +2267,8 @@ static int s3fs_read(const char* path, char* buf, size_t size, off_t offset, str
 
   S3FS_PRN_DBG("[path=%s][size=%zu][offset=%jd][fd=%llu]", path, size, (intmax_t)offset, (unsigned long long)(fi->fh));
   struct fuse_context* pcxt;
+  struct timeval start;
+  gettimeofday(&start, NULL);
   if(NULL != (pcxt = fuse_get_context())){
     S3FS_PRN_INFO("%s, uid=[%d], gid=[%d], pid=[%d]", __FUNCTION__, pcxt->uid, pcxt->gid, pcxt->pid);
   }
@@ -2204,6 +2276,9 @@ static int s3fs_read(const char* path, char* buf, size_t size, off_t offset, str
   FdEntity* ent;
   if(NULL == (ent = FdManager::get()->ExistOpen(path, static_cast<int>(fi->fh)))){
     S3FS_PRN_ERR("could not find opened fd(%s)", path);
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_read, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return -EIO;
   }
   if(ent->GetFd() != static_cast<int>(fi->fh)){
@@ -2215,6 +2290,9 @@ static int s3fs_read(const char* path, char* buf, size_t size, off_t offset, str
   if(!ent->GetSize(realsize) || realsize <= 0){
     S3FS_PRN_ERR("file size is 0, so break to read.");
     FdManager::get()->Close(ent);
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_read, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return 0;
   }
 
@@ -2223,6 +2301,9 @@ static int s3fs_read(const char* path, char* buf, size_t size, off_t offset, str
   }
   FdManager::get()->Close(ent);
 
+  if(diff_millisecond(start) > log_api_over_ms) {
+    S3FS_PRN_WARN("s3fs_read, path:%s, timeused:%dms", path, diff_millisecond(start));
+  }
   return static_cast<int>(res);
 }
 
@@ -2331,6 +2412,8 @@ static int s3fs_release(const char* path, struct fuse_file_info* fi)
   S3FS_PRN_INFO("[path=%s][fd=%llu]", path, (unsigned long long)(fi->fh));
 
   struct fuse_context* pcxt;
+   struct timeval start;
+   gettimeofday(&start, NULL);
   if(NULL != (pcxt = fuse_get_context())){
     S3FS_PRN_INFO("%s, uid=[%d], gid=[%d], pid=[%d]", __FUNCTION__, pcxt->uid, pcxt->gid, pcxt->pid);
   }
@@ -2347,6 +2430,9 @@ static int s3fs_release(const char* path, struct fuse_file_info* fi)
   FdEntity* ent;
   if(NULL == (ent = FdManager::get()->GetFdEntity(path, static_cast<int>(fi->fh)))){
     S3FS_PRN_ERR("could not find fd(file=%s)", path);
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_release, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return -EIO;
   }
   if(ent->GetFd() != static_cast<int>(fi->fh)){
@@ -2361,6 +2447,9 @@ static int s3fs_release(const char* path, struct fuse_file_info* fi)
     }
   }
   S3FS_MALLOCTRIM(0);
+  if(diff_millisecond(start) > log_api_over_ms) {
+    S3FS_PRN_WARN("s3fs_release, path:%s, timeused:%dms", path, diff_millisecond(start));
+  }
 
   return 0;
 }
@@ -2368,6 +2457,8 @@ static int s3fs_release(const char* path, struct fuse_file_info* fi)
 static int s3fs_opendir(const char* path, struct fuse_file_info* fi)
 {
   struct fuse_context* pcxt;
+  struct timeval start;
+  gettimeofday(&start, NULL);
   if(NULL != (pcxt = fuse_get_context())){
     S3FS_PRN_INFO("%s, uid=[%d], gid=[%d], pid=[%d]", __FUNCTION__, pcxt->uid, pcxt->gid, pcxt->pid);
   }
@@ -2381,6 +2472,9 @@ static int s3fs_opendir(const char* path, struct fuse_file_info* fi)
     result = check_parent_object_access(path, mask);
   }
   S3FS_MALLOCTRIM(0);
+  if(diff_millisecond(start) > log_api_over_ms) {
+    S3FS_PRN_WARN("s3fs_opendir, path:%s, timeused:%dms", path, diff_millisecond(start));
+  }
 
   return result;
 }
@@ -2528,17 +2622,25 @@ static int s3fs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off
 
   S3FS_PRN_INFO("[path=%s]", path);
   struct fuse_context* pcxt;
+  struct timeval start;
+  gettimeofday(&start, NULL);
   if(NULL != (pcxt = fuse_get_context())){
     S3FS_PRN_INFO("%s, uid=[%d], gid=[%d], pid=[%d]", __FUNCTION__, pcxt->uid, pcxt->gid, pcxt->pid);
   }
 
   if(0 != (result = check_object_access(path, X_OK, NULL))){
+    if(diff_millisecond(start) > log_api_over_ms) {
+       S3FS_PRN_WARN("s3fs_readdir, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return result;
   }
 
   // get a list of all the objects
   if((result = list_bucket(path, head, "/")) != 0){
     S3FS_PRN_ERR("list_bucket returns error(%d).", result);
+    if(diff_millisecond(start) > log_api_over_ms) {
+       S3FS_PRN_WARN("s3fs_readdir, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return result;
   }
 
@@ -2546,6 +2648,9 @@ static int s3fs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off
   filler(buf, ".", 0, 0);
   filler(buf, "..", 0, 0);
   if(head.IsEmpty()){
+    if(diff_millisecond(start) > log_api_over_ms) {
+       S3FS_PRN_WARN("s3fs_readdir, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return 0;
   }
 
@@ -2558,6 +2663,9 @@ static int s3fs_readdir(const char* path, void* buf, fuse_fill_dir_t filler, off
     S3FS_PRN_ERR("readdir_multi_head returns error(%d).", result);
   }
   S3FS_MALLOCTRIM(0);
+  if(diff_millisecond(start) > log_api_over_ms) {
+     S3FS_PRN_WARN("s3fs_readdir, path:%s, timeused:%dms", path, diff_millisecond(start));
+  }
 
   return result;
 }
@@ -3287,14 +3395,22 @@ static int s3fs_getxattr(const char* path, const char* name, char* value, size_t
   int       result;
   headers_t meta;
   xattrs_t  xattrs;
-
+ 
+  struct timeval start;
+  gettimeofday(&start, NULL);
   // check parent directory attribute.
   if(0 != (result = check_parent_object_access(path, X_OK))){
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_getxattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return result;
   }
 
   // get headders
   if(0 != (result = get_object_attribute(path, NULL, &meta))){
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_getxattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return result;
   }
 
@@ -3302,6 +3418,9 @@ static int s3fs_getxattr(const char* path, const char* name, char* value, size_t
   headers_t::iterator hiter = meta.find("x-cos-meta-xattr");
   if(meta.end() == hiter){
     // object does not have xattrs
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_getxattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return -ENOATTR;
   }
   string strxattrs = hiter->second;
@@ -3314,6 +3433,9 @@ static int s3fs_getxattr(const char* path, const char* name, char* value, size_t
   if(xattrs.end() == xiter){
     // not found name in xattrs
     free_xattrs(xattrs);
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_getxattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return -ENOATTR;
   }
 
@@ -3329,6 +3451,9 @@ static int s3fs_getxattr(const char* path, const char* name, char* value, size_t
     if(static_cast<size_t>(size) < length){
       // over buffer size
       free_xattrs(xattrs);
+      if(diff_millisecond(start) > log_api_over_ms) {
+        S3FS_PRN_WARN("s3fs_getxattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+      }
       return -ERANGE;
     }
     if(pvalue){
@@ -3337,6 +3462,9 @@ static int s3fs_getxattr(const char* path, const char* name, char* value, size_t
   }
   free_xattrs(xattrs);
 
+  if(diff_millisecond(start) > log_api_over_ms) {
+    S3FS_PRN_WARN("s3fs_getxattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+  }
   return static_cast<int>(length);
 }
 
@@ -3344,11 +3472,16 @@ static int s3fs_listxattr(const char* path, char* list, size_t size)
 {
   S3FS_PRN_INFO("[path=%s][list=%p][size=%zu]", path, list, size);
   struct fuse_context* pcxt;
+  struct timeval start;
+  gettimeofday(&start, NULL);
   if(NULL != (pcxt = fuse_get_context())){
     S3FS_PRN_INFO("%s, uid=[%d], gid=[%d], pid=[%d]", __FUNCTION__, pcxt->uid, pcxt->gid, pcxt->pid);
   }
 
   if(!path){
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_listxattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return -EIO;
   }
 
@@ -3358,11 +3491,17 @@ static int s3fs_listxattr(const char* path, char* list, size_t size)
 
   // check parent directory attribute.
   if(0 != (result = check_parent_object_access(path, X_OK))){
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_listxattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return result;
   }
 
   // get headders
   if(0 != (result = get_object_attribute(path, NULL, &meta))){
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_listxattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return result;
   }
 
@@ -3370,6 +3509,9 @@ static int s3fs_listxattr(const char* path, char* list, size_t size)
   headers_t::iterator iter;
   if(meta.end() == (iter = meta.find("x-cos-meta-xattr"))){
     // object does not have xattrs
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_listxattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return 0;
   }
   string strxattrs = iter->second;
@@ -3386,16 +3528,25 @@ static int s3fs_listxattr(const char* path, char* list, size_t size)
 
   if(0 == total){
     free_xattrs(xattrs);
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_listxattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return 0;
   }
 
   // check parameters
   if(size <= 0){
     free_xattrs(xattrs);
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_listxattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return total;
   }
   if(!list || size < total){
     free_xattrs(xattrs);
+    if(diff_millisecond(start) > log_api_over_ms) {
+      S3FS_PRN_WARN("s3fs_listxattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+    }
     return -ERANGE;
   }
 
@@ -3408,6 +3559,9 @@ static int s3fs_listxattr(const char* path, char* list, size_t size)
     }
   }
   free_xattrs(xattrs);
+  if(diff_millisecond(start) > log_api_over_ms) {
+    S3FS_PRN_WARN("s3fs_listxattr, path:%s, timeused:%dms", path, diff_millisecond(start));
+  }
 
   return total;
 }
@@ -3603,6 +3757,8 @@ static void s3fs_destroy(void*)
 static int s3fs_access(const char* path, int mask)
 {
   struct fuse_context* pcxt;
+  struct timeval start;
+  gettimeofday(&start, NULL);
   if(NULL != (pcxt = fuse_get_context())){
     S3FS_PRN_INFO("%s, uid=[%d], gid=[%d], pid=[%d]", __FUNCTION__, pcxt->uid, pcxt->gid, pcxt->pid);
   }
@@ -3615,6 +3771,9 @@ static int s3fs_access(const char* path, int mask)
 
   int result = check_object_access(path, mask, NULL);
   S3FS_MALLOCTRIM(0);
+  if(diff_millisecond(start) > log_api_over_ms) {
+    S3FS_PRN_WARN("s3fs_access, path:%s, timeused:%dms", path, diff_millisecond(start));
+  }
   return result;
 }
 
@@ -4562,6 +4721,11 @@ static int my_fuse_opt_proc(void* data, const char* arg, int key, struct fuse_ar
       S3FS_PRN_CRIT("max_prefetch_bytes:%zu", max_prefetch_bytes);
       return 0;
     }
+    if(0 == STR2NCMP(arg, "log_api_over_ms=")){
+      log_api_over_ms = static_cast<size_t>(s3fs_strtoofft(strchr(arg, '=') + sizeof(char)));
+      S3FS_PRN_CRIT("log_api_over_ms:%zu", log_api_over_ms);
+      return 0;
+    }
     if(0 == strcmp(arg, "nonempty")){
       nonempty = true;
       return 1; // need to continue for fuse.
@@ -5246,5 +5410,4 @@ int main(int argc, char* argv[])
 * c-basic-offset: 4
 * End:
 * vim600: noet sw=4 ts=4 fdm=marker
-* vim<600: noet sw=4 ts=4
-*/
+* vim<600: noet sw=4 ts=4 */
